@@ -16,11 +16,6 @@
       --muted: #5f6b7a;
       --shadow: 0 8px 24px rgba(17, 24, 39, 0.12);
       --shadow-soft: 0 4px 14px rgba(17, 24, 39, 0.08);
-      --fire: #b91c1c;
-      --flood: #1d4ed8;
-      --fire-overlay: #a855f7;
-      --flood-overlay: #06b6d4;
-      --air-overlay: #7c3aed;
     }
 
     html, body {
@@ -204,7 +199,6 @@
     .insight-item {
       padding: 12px 0;
       border-top: 1px solid #e8edf3;
-      cursor: pointer;
     }
 
     .insight-item:first-child {
@@ -223,32 +217,6 @@
       color: #374151;
       line-height: 1.55;
       font-size: 13px;
-    }
-
-    .insight-warning-fire,
-    .insight-warning-flood,
-    .insight-warning-air,
-    .insight-warning-neutral {
-      margin-top: 7px;
-      font-size: 12px;
-      line-height: 1.5;
-      font-weight: 600;
-    }
-
-    .insight-warning-fire {
-      color: var(--fire);
-    }
-
-    .insight-warning-flood {
-      color: var(--flood);
-    }
-
-    .insight-warning-air {
-      color: var(--air-overlay);
-    }
-
-    .insight-warning-neutral {
-      color: #475569;
     }
 
     .popup-shell {
@@ -292,7 +260,7 @@
 
     .factor-row {
       display: grid;
-      grid-template-columns: 72px 1fr 42px;
+      grid-template-columns: 90px 1fr 42px;
       align-items: center;
       gap: 8px;
       font-size: 12px;
@@ -438,7 +406,7 @@
   <div id="appShell">
     <div id="header">
       <h1>LA Urban Environmental Risk Explorer</h1>
-      <p>Interactive neighborhood risk map powered by FastAPI, PostgreSQL, and PostGIS.</p>
+      <p>Interactive neighborhood risk map based on a pre-exported GeoJSON for deployment and presentation.</p>
     </div>
 
     <div id="controlsWrap">
@@ -455,11 +423,8 @@
 
         <div class="control-group">
           <label for="contextLayer">Context Layer</label>
-          <select id="contextLayer">
+          <select id="contextLayer" disabled>
             <option value="off">Off</option>
-            <option value="fire">Wildfire History</option>
-            <option value="flood">Flood Zones (FEMA)</option>
-            <option value="air">Air Pollution</option>
           </select>
         </div>
 
@@ -468,18 +433,15 @@
           <select id="contextFilter" disabled>
             <option value="all">No additional filter</option>
           </select>
-          <div id="contextFilterHelp" class="control-help"></div>
+          <div id="contextFilterHelp" class="control-help">Static deployment mode: backend context layers are turned off.</div>
         </div>
 
         <div class="control-group">
-  <label for="insightToggle">Compare to Real Data</label>
-  <select id="insightToggle">
-    <option value="off" selected>Off</option>
-    <option value="fire">Compare Fire Risk</option>
-    <option value="flood">Compare Flood Risk</option>
-    <option value="air">Compare Air Pollution</option>
-  </select>
-</div>
+          <label for="insightToggle">Compare to Real Data</label>
+          <select id="insightToggle" disabled>
+            <option value="off" selected>Off</option>
+          </select>
+        </div>
 
         <div class="control-group">
           <label>&nbsp;</label>
@@ -495,11 +457,11 @@
         <div id="panelAccent" class="panel-accent"></div>
         <div class="panel-inner">
           <h3>Map Insights</h3>
-<p class="panel-subtitle">Compare model results with real-world environmental data</p>
-<p class="panel-explainer">
-  Use this panel to see the highest-risk areas and where real-world conditions appear stronger than the model score.
-</p>
-          <div id="flaggedContent">No insights yet.</div>
+          <p class="panel-subtitle">Static presentation view</p>
+          <p class="panel-explainer">
+            This deployed version uses a pre-exported neighborhood GeoJSON so the map can load publicly without requiring the live PostGIS backend.
+          </p>
+          <div id="flaggedContent">Loading summary...</div>
         </div>
       </div>
     </div>
@@ -507,6 +469,8 @@
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
+    const STATIC_GEOJSON_URL = "/static/neighborhoods.geojson";
+
     const map = L.map("map").setView([34.05, -118.32], 10);
 
     const positron = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
@@ -541,45 +505,15 @@
     map.createPane("neighborhoodPane");
     map.getPane("neighborhoodPane").style.zIndex = 400;
 
-    map.createPane("floodPane");
-    map.getPane("floodPane").style.zIndex = 645;
-    map.getPane("floodPane").style.pointerEvents = "auto";
-
-    map.createPane("firePane");
-    map.getPane("firePane").style.zIndex = 650;
-    map.getPane("firePane").style.pointerEvents = "auto";
-
-    map.createPane("airPane");
-    map.getPane("airPane").style.zIndex = 647;
-    map.getPane("airPane").style.pointerEvents = "auto";
-
     let geojsonLayer = null;
-    let fireLayer = null;
-    let floodLayer = null;
-    let airLayer = null;
-
-    let cachedFireData = null;
-    let cachedFloodData = null;
     let hasFitBounds = false;
 
     let activeScenario = "baseline";
-    let activeInsightToggle = "off";
-    let activeContextLayer = "off";
-    let activeContextFilter = "all";
-    let activeFireYear = "all";
-    let activeBreaks = [20, 30, 40, 50];
-
-    const contextLayerSelect = document.getElementById("contextLayer");
-    const contextFilterSelect = document.getElementById("contextFilter");
-    const contextFilterHelp = document.getElementById("contextFilterHelp");
-
-    const AIR_FILTERS = {
-      pm2_5: { label: "PM2.5", prop: "pm2_5", units: "µg/m³" },
-      ozone: { label: "Ozone", prop: "ozone", units: "ppm" },
-      diesel: { label: "Diesel PM", prop: "dieselpm", units: "index" },
-      traffic: { label: "Traffic Pollution", prop: "traffic", units: "index" },
-      tox: { label: "Toxic Releases", prop: "tox_rel", units: "index" },
-      pesticide: { label: "Pesticides", prop: "pesticide", units: "index" }
+    let activeBreaks = {
+      min: 0,
+      max: 100,
+      thresholds: [20, 40, 60, 80],
+      labels: ["0–20", "20–40", "40–60", "60–80", "80–100"]
     };
 
     function format(val) {
@@ -598,47 +532,15 @@
       return labels[val] || val;
     }
 
-    function prettyInsightLabel(val) {
-  const labels = {
-    off: "Off",
-    fire: "Compare Fire Risk",
-    flood: "Compare Flood Risk",
-    air: "Compare Air Pollution"
-  };
-  return labels[val] || val;
-}
-
-    function prettyContextLabel(val) {
-      const labels = {
-        off: "Off",
-        fire: "Wildfire History",
-        flood: "Flood Zones (FEMA)",
-        air: "Air Pollution"
-      };
-      return labels[val] || val;
-    }
-
-    function getContextFilterLabel() {
-      if (activeContextLayer === "fire") {
-        return activeContextFilter === "all" ? "All wildfire years" : `Wildfire year ${activeContextFilter}`;
-      }
-      if (activeContextLayer === "flood") {
-        return activeContextFilter === "all" ? "All FEMA flood zones" : `Flood zone ${activeContextFilter}`;
-      }
-      if (activeContextLayer === "air") {
-        return AIR_FILTERS[activeContextFilter]?.label || "PM2.5";
-      }
-      return "No additional filter";
-    }
-
     function getRampForScenario(scenario) {
-  const ramps = {
-    baseline: ["#e8f3b3", "#cfe27a", "#9fcb4a", "#5ea933", "#256f2d"],
-    heat_fire: ["#ffe08a", "#ffbf5a", "#ff9333", "#e85d0c", "#992101"],
-    storm_flood: ["#d8f0f4", "#9ed9e8", "#5db9d7", "#247dbd", "#0b4f8a"],
-    air_focus: ["#f2ecff", "#c9b8ff", "#9b84f2", "#6a4ed6", "#3b1f8f"]  };
-  return ramps[scenario] || ramps.baseline;
-}
+      const ramps = {
+        baseline: ["#e8f3b3", "#cfe27a", "#9fcb4a", "#5ea933", "#256f2d"],
+        heat_fire: ["#ffe08a", "#ffbf5a", "#ff9333", "#e85d0c", "#992101"],
+        storm_flood: ["#d8f0f4", "#9ed9e8", "#5db9d7", "#247dbd", "#0b4f8a"],
+        air_focus: ["#f2ecff", "#c9b8ff", "#9b84f2", "#6a4ed6", "#3b1f8f"]
+      };
+      return ramps[scenario] || ramps.baseline;
+    }
 
     function getAccentForScenario(scenario) {
       const accents = {
@@ -694,270 +596,212 @@
     }
 
     function percentile(sortedValues, p) {
-  if (!sortedValues.length) return 0;
-  const index = (sortedValues.length - 1) * p;
-  const lower = Math.floor(index);
-  const upper = Math.ceil(index);
-  if (lower === upper) return sortedValues[lower];
-  const weight = index - lower;
-  return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
-}
-
-function roundDown(value, step = 1) {
-  return Math.floor(value / step) * step;
-}
-
-function roundUp(value, step = 1) {
-  return Math.ceil(value / step) * step;
-}
-
-function formatRangeNumber(value) {
-  if (!isFinite(value)) return "N/A";
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
-function chooseRoundingStep(min, max) {
-  const spread = max - min;
-
-  if (spread <= 6) return 0.1;
-if (spread <= 12) return 0.5;
-if (spread <= 25) return 1;
-if (spread <= 45) return 2;
-return 5;
-}
-
-function formatRange(min, max) {
-  if (Math.abs(max - min) < 0.5) {
-    return `${min.toFixed(1)}`;
-  }
-  return `${min.toFixed(1)}–${max.toFixed(1)}`;
-}
-
-function buildLegendLabels(min, max, thresholds) {
-  const [b1, b2, b3, b4] = thresholds;
-
-  return [
-    formatRange(0, b1),
-    formatRange(b1, b2),
-    formatRange(b2, b3),
-    formatRange(b3, b4),
-    formatRange(b4, max)
-  ];
-}
-
-function computeDynamicBreaks(compareData) {
-  const scores = compareData
-    .map(d => Number(d.risk_score_0to100))
-    .filter(v => !isNaN(v))
-    .sort((a, b) => a - b);
-
-  if (!scores.length) {
-    return {
-      min: 0,
-      max: 100,
-      thresholds: [20, 40, 60, 80],
-      labels: ["0–20 Lowest", "20–40", "40–60", "60–80", "80–100 Highest"]
-    };
-  }
-
-  const min = scores[0];
-  const max = scores[scores.length - 1];
-
-  let q1 = percentile(scores, 0.20);
-  let q2 = percentile(scores, 0.40);
-  let q3 = percentile(scores, 0.60);
-  let q4 = percentile(scores, 0.80);
-
-  let thresholds = [q1, q2, q3, q4].map(v => Number(v.toFixed(2)));
-
-  for (let i = 1; i < thresholds.length; i++) {
-    if (thresholds[i] <= thresholds[i - 1]) {
-      thresholds[i] = Number((thresholds[i - 1] + 0.01).toFixed(2));
+      if (!sortedValues.length) return 0;
+      const index = (sortedValues.length - 1) * p;
+      const lower = Math.floor(index);
+      const upper = Math.ceil(index);
+      if (lower === upper) return sortedValues[lower];
+      const weight = index - lower;
+      return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
     }
-  }
 
-  return {
-    min,
-    max,
-    thresholds,
-    labels: buildLegendLabels(min, max, thresholds)
-  };
-}
+    function formatRange(min, max) {
+      if (Math.abs(max - min) < 0.5) {
+        return `${min.toFixed(1)}`;
+      }
+      return `${min.toFixed(1)}–${max.toFixed(1)}`;
+    }
 
-function getColor(score) {
-  const ramp = getRampForScenario(activeScenario);
-  const [b1, b2, b3, b4] = activeBreaks.thresholds;
+    function buildLegendLabels(min, max, thresholds) {
+      const [b1, b2, b3, b4] = thresholds;
+      return [
+        formatRange(min, b1),
+        formatRange(b1, b2),
+        formatRange(b2, b3),
+        formatRange(b3, b4),
+        formatRange(b4, max)
+      ];
+    }
 
-  if (score === null || score === undefined || isNaN(score)) {
-    return "#e5e7eb";
-  }
+    function computeDynamicBreaks(features) {
+      const scores = features
+        .map(f => Number(getScenarioScore(f.properties, activeScenario)))
+        .filter(v => !isNaN(v))
+        .sort((a, b) => a - b);
 
-  if (score >= b4) return ramp[4];
-  if (score >= b3) return ramp[3];
-  if (score >= b2) return ramp[2];
-  if (score >= b1) return ramp[1];
-  return ramp[0];
-}
+      if (!scores.length) {
+        return {
+          min: 0,
+          max: 100,
+          thresholds: [20, 40, 60, 80],
+          labels: ["0–20", "20–40", "40–60", "60–80", "80–100"]
+        };
+      }
+
+      const min = scores[0];
+      const max = scores[scores.length - 1];
+
+      let q1 = percentile(scores, 0.20);
+      let q2 = percentile(scores, 0.40);
+      let q3 = percentile(scores, 0.60);
+      let q4 = percentile(scores, 0.80);
+
+      let thresholds = [q1, q2, q3, q4].map(v => Number(v.toFixed(2)));
+
+      for (let i = 1; i < thresholds.length; i++) {
+        if (thresholds[i] <= thresholds[i - 1]) {
+          thresholds[i] = Number((thresholds[i - 1] + 0.01).toFixed(2));
+        }
+      }
+
+      return {
+        min,
+        max,
+        thresholds,
+        labels: buildLegendLabels(min, max, thresholds)
+      };
+    }
+
+    function normalizeRisk(value) {
+      const num = Number(value);
+      if (isNaN(num)) return null;
+
+      if (num <= 1) return num * 100;
+      return num;
+    }
+
+    function getRiskValue(props, keys) {
+      for (const key of keys) {
+        if (props[key] !== undefined && props[key] !== null && props[key] !== "") {
+          return normalizeRisk(props[key]);
+        }
+      }
+      return null;
+    }
+
+    function getScenarioScore(props, scenario) {
+      const heat = getRiskValue(props, ["heat", "heat_risk"]);
+      const flood = getRiskValue(props, ["flood", "flood_risk"]);
+      const fire = getRiskValue(props, ["fire", "fire_risk"]);
+      const air = getRiskValue(props, ["air", "air_risk", "air_context_value"]);
+
+      if (props.risk_score_0to100 !== undefined && props.risk_score_0to100 !== null && scenario === "baseline") {
+        return normalizeRisk(props.risk_score_0to100);
+      }
+
+      const h = heat ?? 0;
+      const fl = flood ?? 0;
+      const fi = fire ?? 0;
+      const a = air ?? 0;
+
+      if (scenario === "heat_fire") {
+        return (h * 0.2) + (fi * 0.5) + (fl * 0.15) + (a * 0.15);
+      }
+
+      if (scenario === "storm_flood") {
+        return (fl * 0.5) + (h * 0.15) + (fi * 0.15) + (a * 0.2);
+      }
+
+      if (scenario === "air_focus") {
+        return (a * 0.5) + (h * 0.15) + (fl * 0.15) + (fi * 0.2);
+      }
+
+      return (h + fl + fi + a) / 4;
+    }
+
+    function getRiskLevel(score) {
+      if (score === null || score === undefined || isNaN(score)) return "N/A";
+      if (score >= activeBreaks.thresholds[3]) return "High";
+      if (score >= activeBreaks.thresholds[1]) return "Medium";
+      return "Low";
+    }
+
+    function getTopDrivers(props) {
+      const drivers = [
+        { name: "Heat", value: getRiskValue(props, ["heat", "heat_risk"]) ?? 0 },
+        { name: "Flood", value: getRiskValue(props, ["flood", "flood_risk"]) ?? 0 },
+        { name: "Fire", value: getRiskValue(props, ["fire", "fire_risk"]) ?? 0 },
+        { name: "Air Pollution", value: getRiskValue(props, ["air", "air_risk", "air_context_value"]) ?? 0 }
+      ];
+
+      return drivers
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 2)
+        .map(d => d.name);
+    }
+
+    function getColor(score) {
+      const ramp = getRampForScenario(activeScenario);
+      const [b1, b2, b3, b4] = activeBreaks.thresholds;
+
+      if (score === null || score === undefined || isNaN(score)) {
+        return "#e5e7eb";
+      }
+
+      if (score >= b4) return ramp[4];
+      if (score >= b3) return ramp[3];
+      if (score >= b2) return ramp[2];
+      if (score >= b1) return ramp[1];
+      return ramp[0];
+    }
 
     function updatePanelAccent() {
       const accent = getAccentForScenario(activeScenario);
       document.getElementById("panelAccent").style.background = accent;
     }
 
-    function isFirePresetActive() {
-      return activeScenario === "heat_fire";
-    }
-
-    function isFloodPresetActive() {
-      return activeScenario === "storm_flood";
-    }
-
-    function isAirPresetActive() {
-      return activeScenario === "air_focus";
-    }
-
-    function isFireInsightActive() {
-      return activeInsightToggle === "fire" && isFirePresetActive();
-    }
-
-    function isFloodInsightActive() {
-      return activeInsightToggle === "flood" && isFloodPresetActive();
-    }
-
-    function isAirInsightActive() {
-      return activeInsightToggle === "air" && isAirPresetActive();
-    }
-
-    function contextLayerMode() {
-      if (activeContextLayer === "fire" && isFirePresetActive()) return "fire";
-      if (activeContextLayer === "flood" && isFloodPresetActive()) return "flood";
-      if (activeContextLayer === "air" && isAirPresetActive()) return "air";
-      return "none";
-    }
-
-    function getInactiveControlMessage() {
-  if (activeContextLayer === "fire" && !isFirePresetActive()) {
-    return "Wildfire history is visible as context, but it does not influence the current preset.";
-  }
-  if (activeContextLayer === "flood" && !isFloodPresetActive()) {
-    return "Flood zones are visible as context, but they do not influence the current preset.";
-  }
-  if (activeContextLayer === "air" && !isAirPresetActive()) {
-    return "Air pollution is visible as context, but it does not influence the current preset.";
-  }
-  if (activeInsightToggle === "fire" && !isFirePresetActive()) {
-    return "Fire comparison is only available in the Fire Focused preset.";
-  }
-  if (activeInsightToggle === "flood" && !isFloodPresetActive()) {
-    return "Flood comparison is only available in the Flood Focused preset.";
-  }
-  if (activeInsightToggle === "air" && !isAirPresetActive()) {
-    return "Air pollution comparison is only available in the Air Pollution Focused preset.";
-  }
-  return null;
-}
-
     function styleFeature(feature) {
-      const score = feature.properties.risk_score_0to100 || 0;
-
-      const fireFlagged = isFireInsightActive() && feature.properties.insight_flag;
-      const floodFlagged = isFloodInsightActive() && feature.properties.flood_mismatch_flag;
-      const airFlagged = isAirInsightActive() && feature.properties.air_mismatch_flag;
-
-      let borderColor = "#475569";
-      let borderWeight = 1.6;
-
-      if (airFlagged) {
-        borderColor = "#7c3aed";
-        borderWeight = 3.8;
-      }
-
-      if (floodFlagged) {
-        borderColor = "#1d4ed8";
-        borderWeight = 3.8;
-      }
-
-      if (fireFlagged) {
-        borderColor = "#b91c1c";
-        borderWeight = 3.8;
-      }
+      const score = getScenarioScore(feature.properties, activeScenario);
 
       return {
         pane: "neighborhoodPane",
         fillColor: getColor(score),
-        weight: borderWeight,
+        weight: 1.6,
         opacity: 1,
-        color: borderColor,
+        color: "#475569",
         fillOpacity: 0.78
       };
     }
 
     function buildPopupContent(props) {
-  const barColors = getFactorBarColors(activeScenario);
+      const barColors = getFactorBarColors(activeScenario);
 
-  const showFireInsight = isFireInsightActive() && props.insight_flag;
-  const showFloodInsight = isFloodInsightActive() && props.flood_mismatch_flag;
-  const showAirInsight = isAirInsightActive() && props.air_mismatch_flag;
+      const score = getScenarioScore(props, activeScenario);
+      const heat = (getRiskValue(props, ["heat", "heat_risk"]) ?? 0) / 100;
+      const flood = (getRiskValue(props, ["flood", "flood_risk"]) ?? 0) / 100;
+      const fire = (getRiskValue(props, ["fire", "fire_risk"]) ?? 0) / 100;
+      const air = (getRiskValue(props, ["air", "air_risk", "air_context_value"]) ?? 0) / 100;
 
-  return `
-    <div class="popup-shell">
-      <div class="popup-title">${props.name}</div>
+      return `
+        <div class="popup-shell">
+          <div class="popup-title">${props.name || props.neighborhood || "Neighborhood"}</div>
 
-      <div class="popup-grid">
-        <div><span class="popup-label">Modeled Risk Score:</span> ${format(props.risk_score_0to100)}</div>
-        <div><span class="popup-label">Relative Risk Level:</span> ${props.risk_level ?? "N/A"}</div>
-      </div>
+          <div class="popup-grid">
+            <div><span class="popup-label">Risk Score:</span> ${format(score)}</div>
+            <div><span class="popup-label">Risk Level:</span> ${getRiskLevel(score)}</div>
+          </div>
 
-      <div class="popup-section">
-        <span class="popup-label">Top Drivers:</span><br>
-        ${props.top_drivers ? props.top_drivers.join(", ") : "N/A"}
-      </div>
+          <div class="popup-section">
+            <span class="popup-label">Top Drivers:</span><br>
+            ${getTopDrivers(props).join(", ")}
+          </div>
 
-      <div class="popup-section">
-        <span class="popup-label">Factor Breakdown</span>
-        <div class="factor-bars">
-          ${buildBar("Heat", props.heat, barColors.heat)}
-          ${buildBar("Flood", props.flood, barColors.flood)}
-          ${buildBar("Fire", props.fire, barColors.fire)}
-          ${buildBar("Air Pollution", props.air, barColors.air)}
+          <div class="popup-section">
+            <span class="popup-label">Factor Breakdown</span>
+            <div class="factor-bars">
+              ${buildBar("Heat", heat, barColors.heat)}
+              ${buildBar("Flood", flood, barColors.flood)}
+              ${buildBar("Fire", fire, barColors.fire)}
+              ${buildBar("Air Pollution", air, barColors.air)}
+            </div>
+          </div>
+
+          <div class="popup-note">
+            Static deployed view using pre-exported neighborhood data.
+          </div>
         </div>
-      </div>
-
-      ${showFireInsight ? `
-        <div class="popup-section" style="color:#b91c1c;">
-          <span class="popup-label">⚠ Fire Comparison</span><br>
-          ${props.insight_message || "This area has wildfire history, but the model currently shows lower risk."}
-        </div>
-      ` : ""}
-
-      ${showFloodInsight ? `
-        <div class="popup-section">
-          <span class="popup-label">Flood Overlap:</span> ${format(props.historical_flood_overlap_pct)}%
-        </div>
-        <div class="popup-section" style="color:#1d4ed8;">
-          <span class="popup-label">⚠ Flood Comparison</span><br>
-          ${props.flood_insight_message || "This area overlaps flood zones more than the model currently suggests."}
-        </div>
-      ` : ""}
-
-      ${showAirInsight ? `
-        <div class="popup-section">
-          <span class="popup-label">Air Context Value:</span> ${format(props.air_context_value)}
-        </div>
-        <div class="popup-section" style="color:#7c3aed;">
-          <span class="popup-label">⚠ Air Pollution Comparison</span><br>
-          ${props.air_insight_message || "This area shows stronger air pollution burden than the model currently suggests."}
-        </div>
-      ` : ""}
-
-      ${(showFireInsight || showFloodInsight || showAirInsight) ? `
-        <div class="popup-note">
-          ${props.confidence_note || "Use the context layers to compare the model with real-world conditions."}
-        </div>
-      ` : ""}
-    </div>
-  `;
-}
+      `;
+    }
 
     function onEachFeature(feature, layer) {
       layer.bindPopup(buildPopupContent(feature.properties));
@@ -965,9 +809,9 @@ function getColor(score) {
       layer.on({
         mouseover: (e) => {
           e.target.setStyle({
-            weight: Math.max((e.target.options.weight || 2) + 0.8, 3),
+            weight: 2.6,
             color: "#111827",
-            fillOpacity: 0.8
+            fillOpacity: 0.82
           });
           e.target.bringToFront();
         },
@@ -982,651 +826,132 @@ function getColor(score) {
       });
     }
 
-    async function fetchFireData() {
-      if (cachedFireData) return cachedFireData;
-
-      const fireResponse = await fetch("/fire-events/geojson");
-      if (!fireResponse.ok) {
-        throw new Error("Could not load fire events.");
-      }
-
-      cachedFireData = await fireResponse.json();
-      return cachedFireData;
-    }
-
-    async function fetchFloodData() {
-      if (cachedFloodData) return cachedFloodData;
-
-      const floodResponse = await fetch("/flood-raw/geojson");
-      if (!floodResponse.ok) {
-        throw new Error("Could not load flood layer.");
-      }
-
-      cachedFloodData = await floodResponse.json();
-      return cachedFloodData;
-    }
-
-    function getUniqueYears(fireData) {
-      return (fireData.features || [])
-        .map(feature => feature.properties?.year)
-        .filter(year => year !== null && year !== undefined && year !== "")
-        .map(year => String(year))
-        .filter((year, index, arr) => arr.indexOf(year) === index)
-        .sort((a, b) => Number(b) - Number(a));
-    }
-
-    function getUniqueFloodZones(floodData) {
-      return (floodData.features || [])
-        .map(feature => feature.properties?.fld_zone)
-        .filter(zone => zone !== null && zone !== undefined && String(zone).trim() !== "")
-        .map(zone => String(zone).trim())
-        .filter((zone, index, arr) => arr.indexOf(zone) === index)
-        .sort((a, b) => a.localeCompare(b));
-    }
-
-    async function refreshContextFilterUI() {
-      const layerType = contextLayerSelect.value;
-      const currentValue = contextFilterSelect.value || "all";
-
-      contextFilterSelect.innerHTML = "";
-      contextFilterSelect.disabled = true;
-      contextFilterHelp.textContent = "";
-
-      if (layerType === "fire") {
-        try {
-          const fireData = await fetchFireData();
-          const years = getUniqueYears(fireData);
-
-          contextFilterSelect.innerHTML = `<option value="all">All wildfire years</option>`;
-          years.forEach(year => {
-            const option = document.createElement("option");
-            option.value = year;
-            option.textContent = year;
-            contextFilterSelect.appendChild(option);
-          });
-
-          if ([...contextFilterSelect.options].some(opt => opt.value === currentValue)) {
-            contextFilterSelect.value = currentValue;
-          } else {
-            contextFilterSelect.value = "all";
-          }
-
-          contextFilterSelect.disabled = false;
-          contextFilterHelp.textContent = "Applies only to the wildfire history layer.";
-        } catch (err) {
-          console.warn("Could not populate wildfire year filter:", err);
-          contextFilterSelect.innerHTML = `<option value="all">All wildfire years</option>`;
-          contextFilterSelect.disabled = true;
-          contextFilterHelp.textContent = "Wildfire years could not be loaded.";
-        }
-        return;
-      }
-
-      if (layerType === "flood") {
-        try {
-          const floodData = await fetchFloodData();
-          const zones = getUniqueFloodZones(floodData);
-
-          contextFilterSelect.innerHTML = `<option value="all">All FEMA flood zones</option>`;
-          zones.forEach(zone => {
-            const option = document.createElement("option");
-            option.value = zone;
-            option.textContent = zone;
-            contextFilterSelect.appendChild(option);
-          });
-
-          if ([...contextFilterSelect.options].some(opt => opt.value === currentValue)) {
-            contextFilterSelect.value = currentValue;
-          } else {
-            contextFilterSelect.value = "all";
-          }
-
-          contextFilterSelect.disabled = false;
-          contextFilterHelp.textContent = "Use this to isolate specific FEMA flood zone classes.";
-        } catch (err) {
-          console.warn("Could not populate flood zone filter:", err);
-          contextFilterSelect.innerHTML = `<option value="all">All FEMA flood zones</option>`;
-          contextFilterSelect.disabled = true;
-          contextFilterHelp.textContent = "Flood zone filters could not be loaded.";
-        }
-        return;
-      }
-
-      if (layerType === "air") {
-        contextFilterSelect.innerHTML = `
-          <option value="pm2_5">PM2.5</option>
-          <option value="ozone">Ozone</option>
-          <option value="diesel">Diesel PM</option>
-          <option value="traffic">Traffic Pollution</option>
-          <option value="tox">Toxic Releases</option>
-          <option value="pesticide">Pesticides</option>
-        `;
-
-        if ([...contextFilterSelect.options].some(opt => opt.value === currentValue)) {
-          contextFilterSelect.value = currentValue;
-        } else {
-          contextFilterSelect.value = "pm2_5";
-        }
-
-        contextFilterSelect.disabled = false;
-        contextFilterHelp.textContent = "Choose which pollution burden to visualize.";
-        return;
-      }
-
-      contextFilterSelect.innerHTML = `<option value="all">No additional filter</option>`;
-      contextFilterSelect.value = "all";
-      contextFilterSelect.disabled = true;
-      contextFilterHelp.textContent = "Choose a context layer to enable filtering.";
-    }
-
-    function clearContextLayers() {
-      if (fireLayer) {
-        map.removeLayer(fireLayer);
-        fireLayer = null;
-      }
-
-      if (floodLayer) {
-        map.removeLayer(floodLayer);
-        floodLayer = null;
-      }
-
-      if (airLayer) {
-        map.removeLayer(airLayer);
-        airLayer = null;
-      }
-    }
-
-    function getAirOpacity(value, maxValue) {
-      if (!isFinite(value) || !isFinite(maxValue) || maxValue <= 0) return 0.04;
-      const normalized = value / maxValue;
-      return Math.max(0.04, Math.min(0.20, normalized * 0.20));
-    }
-
-    async function loadContextLayer() {
-      clearContextLayers();
-
-      const mode = contextLayerMode();
-      if (mode === "none") return;
-
-      if (mode === "fire") {
-        try {
-          let url = "/fire-events/geojson";
-          const selectedYear = activeContextFilter;
-          activeFireYear = selectedYear;
-
-          if (selectedYear !== "all") {
-            url += `?fire_year=${encodeURIComponent(selectedYear)}`;
-          }
-
-          const response = await fetch(url);
-          if (!response.ok) {
-            throw new Error("Could not load fire events.");
-          }
-
-          const fireData = await response.json();
-
-          fireLayer = L.geoJSON(fireData, {
-            pane: "firePane",
-            interactive: true,
-            style: {
-  color: "#a855f7",
-  weight: 1.2,
-  opacity: 0.35,
-  fillColor: "#a855f7",
-  fillOpacity: 0.10
-},
-            onEachFeature: function(feature, layer) {
-              const props = feature.properties || {};
-              layer.bindPopup(`
-                <div class="popup-shell">
-                  <div class="popup-title">Wildfire History</div>
-                  <div class="popup-grid" style="grid-template-columns: 1fr;">
-                    <div><span class="popup-label">Name:</span> ${props.name ?? "N/A"}</div>
-                    <div><span class="popup-label">Year:</span> ${props.year ?? "N/A"}</div>
-                  </div>
-                  <div class="popup-note">
-                    Historical fire perimeter used as supporting context for the Fire Focused preset.
-                  </div>
-                </div>
-              `);
-            }
-          }).addTo(map);
-
-          fireLayer.bringToFront();
-        } catch (err) {
-          console.warn("Fire layer not loaded yet:", err);
-        }
-      }
-
-      if (mode === "flood") {
-        try {
-          const floodData = await fetchFloodData();
-          const selectedZone = activeContextFilter;
-
-          const filteredFeatures = (floodData.features || []).filter(feature => {
-            if (selectedZone === "all") return true;
-            return String(feature.properties?.fld_zone ?? "").trim() === selectedZone;
-          });
-
-          floodLayer = L.geoJSON(
-            { type: "FeatureCollection", features: filteredFeatures },
-            {
-              pane: "floodPane",
-              interactive: true,
-              style: {
-  color: "#06b6d4",
-  weight: 1.2,
-  opacity: 0.35,
-  fillColor: "#06b6d4",
-  fillOpacity: 0.08
-},
-              onEachFeature: function(feature, layer) {
-                const props = feature.properties || {};
-                const sfhaText = String(props.sfha_tf).toUpperCase() === "T" ? "Yes" : (String(props.sfha_tf).toUpperCase() === "F" ? "No" : (props.sfha_tf ?? "N/A"));
-
-                layer.bindPopup(`
-                  <div class="popup-shell">
-                    <div class="popup-title">FEMA Flood Zone</div>
-                    <div class="popup-grid" style="grid-template-columns: 1fr;">
-                      <div><span class="popup-label">Zone:</span> ${props.fld_zone ?? "N/A"}</div>
-                      <div><span class="popup-label">Subtype:</span> ${props.zone_subty ?? "N/A"}</div>
-                      <div><span class="popup-label">Special Flood Hazard Area:</span> ${sfhaText}</div>
-                      <div><span class="popup-label">Exposure:</span> ${props.f_exposure ?? "N/A"}</div>
-                      <div><span class="popup-label">Flood Score:</span> ${props.flood_score ?? "N/A"}</div>
-                    </div>
-                    <div class="popup-note">
-                      FEMA flood zones are mapped risk classifications, not single historical flood events.
-                    </div>
-                  </div>
-                `);
-              }
-            }
-          ).addTo(map);
-
-          floodLayer.bringToFront();
-        } catch (err) {
-          console.warn("Flood layer not loaded yet:", err);
-        }
-      }
-
-      if (mode === "air") {
-        try {
-          const pollutant = activeContextFilter || "pm2_5";
-          const response = await fetch(`/air-full/geojson?pollutant=${encodeURIComponent(pollutant)}`);
-          if (!response.ok) {
-            throw new Error("Could not load air pollution layer.");
-          }
-
-          const airData = await response.json();
-          const values = (airData.features || [])
-            .map(f => Number(f.properties?.value))
-            .filter(v => !isNaN(v));
-          const maxValue = values.length ? Math.max(...values) : 0;
-          const filterMeta = AIR_FILTERS[pollutant] || AIR_FILTERS.pm2_5;
-
-          airLayer = L.geoJSON(airData, {
-            pane: "airPane",
-            interactive: true,
-            style: feature => {
-  const value = Number(feature.properties?.value);
-  return {
-    color: "#7c3aed",
-    weight: 0.4,
-    opacity: 0.28,
-    fillColor: "#7c3aed",
-    fillOpacity: Math.min(getAirOpacity(value, maxValue), 0.14)
-  };
-},
-            onEachFeature: function(feature, layer) {
-              const props = feature.properties || {};
-              layer.bindPopup(`
-                <div class="popup-shell">
-                  <div class="popup-title">Air Pollution Context</div>
-                  <div class="popup-grid" style="grid-template-columns: 1fr;">
-                    <div><span class="popup-label">Pollutant:</span> ${filterMeta.label}</div>
-                    <div><span class="popup-label">Value:</span> ${format(props.value)} ${filterMeta.units}</div>
-                  </div>
-                  <div class="popup-note">
-                    This layer shows spatial variation in ${filterMeta.label.toLowerCase()} to support the Air Pollution Focused preset.
-                  </div>
-                </div>
-              `);
-            }
-          }).addTo(map);
-
-          airLayer.bringToFront();
-        } catch (err) {
-          console.warn("Air layer not loaded yet:", err);
-        }
-      }
-    }
-
-    function updateFlaggedPanel(compareData) {
+    function updateFlaggedPanel(features) {
       const flaggedContent = document.getElementById("flaggedContent");
-
       updatePanelAccent();
 
-      const fireInsightActive = isFireInsightActive();
-      const floodInsightActive = isFloodInsightActive();
-      const airInsightActive = isAirInsightActive();
-      const contextMode = contextLayerMode();
-      const inactiveControlMessage = getInactiveControlMessage();
+      const ranked = [...features]
+        .map(f => ({
+          name: f.properties.name || f.properties.neighborhood || "Neighborhood",
+          score: getScenarioScore(f.properties, activeScenario),
+          drivers: getTopDrivers(f.properties)
+        }))
+        .filter(item => item.score !== null && !isNaN(item.score))
+        .sort((a, b) => b.score - a.score);
 
-      const highestRisk = compareData[0];
-      const fireFlagged = fireInsightActive ? compareData.filter(item => item.insight_flag) : [];
-      const floodFlagged = floodInsightActive ? compareData.filter(item => item.flood_mismatch_flag) : [];
-      const airFlagged = airInsightActive ? compareData.filter(item => item.air_mismatch_flag) : [];
-
-      const highestFloodOverlap = floodInsightActive
-        ? [...compareData].sort(
-            (a, b) => (b.historical_flood_overlap_pct || 0) - (a.historical_flood_overlap_pct || 0)
-          )[0]
-        : null;
+      const highestRisk = ranked[0];
+      const topThree = ranked.slice(0, 3);
 
       let html = `
         <div class="insight-item">
           <div class="insight-name">Current View State</div>
           <div class="insight-meta">
-  Preset: ${prettyScenarioLabel(activeScenario)}<br>
-  Context Layer: ${prettyContextLabel(activeContextLayer)}<br>
-  Context Filter: ${getContextFilterLabel()}<br>
-  Comparison: ${prettyInsightLabel(activeInsightToggle)}
-</div>
-          ${
-            inactiveControlMessage
-              ? `<div class="insight-warning-neutral">${inactiveControlMessage}</div>`
-              : ""
-          }
+            Preset: ${prettyScenarioLabel(activeScenario)}<br>
+            Data Source: Static neighborhood GeoJSON<br>
+            Context Layers: Disabled for deployment
+          </div>
         </div>
       `;
 
       if (highestRisk) {
         html += `
-          <div class="insight-item" data-neighborhood-id="${highestRisk.neighborhood_id}">
+          <div class="insight-item">
             <div class="insight-name">Highest Risk Neighborhood</div>
             <div class="insight-meta">
-              ${highestRisk.neighborhood_name}<br>
-              Score: ${format(highestRisk.risk_score_0to100)}<br>
-              Drivers: ${(highestRisk.top_drivers || []).join(", ") || "N/A"}
+              ${highestRisk.name}<br>
+              Score: ${format(highestRisk.score)}<br>
+              Drivers: ${highestRisk.drivers.join(", ")}
             </div>
           </div>
         `;
       }
 
-      if (floodInsightActive && highestFloodOverlap) {
-        html += `
-          <div class="insight-item" data-neighborhood-id="${highestFloodOverlap.neighborhood_id}">
-            <div class="insight-name">Strongest Flood Overlap</div>
-            <div class="insight-meta">
-              ${highestFloodOverlap.neighborhood_name}<br>
-              Flood Overlap: ${format(highestFloodOverlap.historical_flood_overlap_pct)}%
-            </div>
-          </div>
-        `;
-      }
-
-      if (fireInsightActive || floodInsightActive || airInsightActive) {
+      if (topThree.length) {
         html += `
           <div class="insight-item">
-<div class="insight-name">Comparison Summary</div>            <div class="insight-meta">
-              ${fireInsightActive ? `Fire comparison flags: ${fireFlagged.length}<br>` : ""}
-${floodInsightActive ? `Flood comparison flags: ${floodFlagged.length}<br>` : ""}
-${airInsightActive ? `Air pollution comparison flags: ${airFlagged.length}<br>` : ""}
+            <div class="insight-name">Top Ranked Areas</div>
+            <div class="insight-meta">
+              ${topThree.map((item, i) => `${i + 1}. ${item.name} (${format(item.score)})`).join("<br>")}
             </div>
-            ${
-              fireInsightActive && contextMode === "fire"
-                ? `<div class="insight-warning-fire">Red outlines highlight neighborhoods where wildfire history appears stronger than the model score.</div>`
-                : ""
-            }
-            ${
-              floodInsightActive && contextMode === "flood"
-                ? `<div class="insight-warning-flood">Blue outlines highlight neighborhoods where flood exposure appears stronger than the model score.</div>`
-                : ""
-            }
-            ${
-              airInsightActive && contextMode === "air"
-                ? `<div class="insight-warning-air">Purple outlines highlight neighborhoods where air pollution burden appears stronger than the model score.</div>`
-                : ""
-            }
           </div>
         `;
       }
 
-      if (fireInsightActive) {
-        fireFlagged
-          .sort((a, b) => b.risk_score_0to100 - a.risk_score_0to100)
-          .slice(0, 3)
-          .forEach(item => {
-            html += `
-              <div class="insight-item" data-neighborhood-id="${item.neighborhood_id}">
-                <div class="insight-name">${item.neighborhood_name}</div>
-                <div class="insight-meta">
-                  Score: ${format(item.risk_score_0to100)}<br>
-                  Fire Factor: ${format(item.fire)}
-                </div>
-                <div class="insight-warning-fire">
-                  ⚠ ${item.insight_message || "Wildfire history appears stronger here than the model score suggests."}                </div>
-              </div>
-            `;
-          });
-      }
-
-      if (floodInsightActive) {
-        floodFlagged
-          .sort((a, b) => b.historical_flood_overlap_pct - a.historical_flood_overlap_pct)
-          .slice(0, 3)
-          .forEach(item => {
-            html += `
-              <div class="insight-item" data-neighborhood-id="${item.neighborhood_id}">
-                <div class="insight-name">${item.neighborhood_name}</div>
-                <div class="insight-meta">
-                  Flood Factor: ${format(item.flood)}<br>
-                  Flood Overlap: ${format(item.historical_flood_overlap_pct)}%
-                </div>
-                <div class="insight-warning-flood">
-                  ⚠ ${item.flood_insight_message || "Flood exposure appears stronger here than the model score suggests."}                </div>
-              </div>
-            `;
-          });
-      }
-
-      if (airInsightActive) {
-        airFlagged
-          .sort((a, b) => (b.air_context_value || 0) - (a.air_context_value || 0))
-          .slice(0, 3)
-          .forEach(item => {
-            html += `
-              <div class="insight-item" data-neighborhood-id="${item.neighborhood_id}">
-                <div class="insight-name">${item.neighborhood_name}</div>
-                <div class="insight-meta">
-                  Air Factor: ${format(item.air)}<br>
-                  Air Context Value: ${format(item.air_context_value)}
-                </div>
-                <div class="insight-warning-air">
-                  ⚠ ${item.air_insight_message || "Air pollution burden appears stronger here than the model score suggests."}
-                </div>
-              </div>
-            `;
-          });
-      }
-
-      if (!fireInsightActive && !floodInsightActive && !airInsightActive) {
-  html += `
-    <div class="insight-item">
-      <div class="insight-name">How to use this panel</div>
-      <div class="insight-meta">
-        Turn on "Compare to Real Data" to see where model results differ from real-world conditions.
-      </div>
-    </div>
-  `;
-}
+      html += `
+        <div class="insight-item">
+          <div class="insight-name">Note</div>
+          <div class="insight-meta">
+            This public version preserves the choropleth, popups, and preset switching while using pre-exported data for reliable deployment.
+          </div>
+        </div>
+      `;
 
       flaggedContent.innerHTML = html;
-
-      document.querySelectorAll(".insight-item[data-neighborhood-id]").forEach(el => {
-        el.addEventListener("click", () => {
-          const id = el.getAttribute("data-neighborhood-id");
-          if (!geojsonLayer) return;
-
-          geojsonLayer.eachLayer(layer => {
-            const layerId = String(layer.feature?.properties?.id);
-            if (layerId === String(id)) {
-              map.fitBounds(layer.getBounds(), { padding: [30, 30] });
-              layer.openPopup();
-            }
-          });
-        });
-      });
     }
 
-    function updateLegend(compareData = []) {
-  const ramp = getRampForScenario(activeScenario);
-  const label = prettyScenarioLabel(activeScenario);
-  const legendDiv = document.getElementById("legendContent");
-  if (!legendDiv) return;
+    function updateLegend() {
+      const ramp = getRampForScenario(activeScenario);
+      const label = prettyScenarioLabel(activeScenario);
+      const legendDiv = document.getElementById("legendContent");
+      if (!legendDiv) return;
 
-  const rangeLabels = activeBreaks.labels || [
-    "0–20 Lowest",
-    "20–40",
-    "40–60",
-    "60–80",
-    "80–100 Highest"
-  ];
+      const rangeLabels = activeBreaks.labels || [
+        "0–20",
+        "20–40",
+        "40–60",
+        "60–80",
+        "80–100"
+      ];
 
-  const contextMode = contextLayerMode();
+      legendDiv.innerHTML = `
+        <div class="legend-title">Legend</div>
+        <div class="legend-subtitle">
+          Colors group neighborhoods by relative risk within the selected preset: ${label}
+        </div>
 
-  let interpretationRows = `
-    <div class="legend-row"><span style="color:#b91c1c; font-weight:700;">▭</span>Red outline = fire mismatch</div>
-    <div class="legend-row"><span style="color:#1d4ed8; font-weight:700;">▭</span>Blue outline = flood mismatch</div>
-    <div class="legend-row"><span style="color:#7c3aed; font-weight:700;">▭</span>Purple outline = air mismatch</div>
-  `;
+        <div class="legend-section">
+          <div class="legend-section-title">Risk Score Groups</div>
+          <div class="legend-row"><span class="legend-swatch" style="background:${ramp[4]};"></span>${rangeLabels[4]} (highest group)</div>
+          <div class="legend-row"><span class="legend-swatch" style="background:${ramp[3]};"></span>${rangeLabels[3]}</div>
+          <div class="legend-row"><span class="legend-swatch" style="background:${ramp[2]};"></span>${rangeLabels[2]}</div>
+          <div class="legend-row"><span class="legend-swatch" style="background:${ramp[1]};"></span>${rangeLabels[1]}</div>
+          <div class="legend-row"><span class="legend-swatch" style="background:${ramp[0]};"></span>${rangeLabels[0]} (lowest group)</div>
+        </div>
 
-  if (contextMode === "fire") {
-    interpretationRows += `
-      <div class="legend-row"><span class="legend-swatch" style="background:rgba(168,85,247,0.18); border-color:#a855f7;"></span>Purple overlay = wildfire history</div>
-    `;
-  }
+        <div class="legend-section">
+          <div class="legend-section-title">Map Highlights</div>
+          <div class="legend-row"><span class="legend-swatch" style="background:#ffffff; border:2px solid #475569;"></span>Neighborhood boundary</div>
+        </div>
 
-  if (contextMode === "flood") {
-    interpretationRows += `
-      <div class="legend-row"><span class="legend-swatch" style="background:rgba(6,182,212,0.12); border-color:#06b6d4;"></span>Teal overlay = FEMA flood zones</div>
-    `;
-  }
-
-  if (contextMode === "air") {
-    interpretationRows += `
-      <div class="legend-row"><span class="legend-swatch" style="background:rgba(124,58,237,0.16); border-color:#7c3aed;"></span>Purple overlay = air pollution layer</div>
-    `;
-  }
-
-  legendDiv.innerHTML = `
-    <div class="legend-title">Legend</div>
-    <div class="legend-subtitle">
-  Colors group neighborhoods by relative risk within the selected preset: ${label}
-</div>
-
-    <div class="legend-section">
-  <div class="legend-section-title">Risk Score Groups</div>
-  <div class="legend-row"><span class="legend-swatch" style="background:${ramp[4]};"></span>${rangeLabels[4]} (highest group)</div>
-  <div class="legend-row"><span class="legend-swatch" style="background:${ramp[3]};"></span>${rangeLabels[3]}</div>
-  <div class="legend-row"><span class="legend-swatch" style="background:${ramp[2]};"></span>${rangeLabels[2]}</div>
-  <div class="legend-row"><span class="legend-swatch" style="background:${ramp[1]};"></span>${rangeLabels[1]}</div>
-  <div class="legend-row"><span class="legend-swatch" style="background:${ramp[0]};"></span>${rangeLabels[0]} (lowest group)</div>
-</div>
-
-    <div class="legend-section">
-      <div class="legend-section-title">Map Highlights</div>
-      ${interpretationRows}
-    </div>
-
-    <div class="legend-note">
-  Darker colors indicate neighborhoods that rank higher within the selected preset. Exact scores still appear in popups.
-</div>
-  `;
-}
+        <div class="legend-note">
+          Darker colors indicate neighborhoods that rank higher within the selected preset. Exact scores appear in popups.
+        </div>
+      `;
+    }
 
     async function loadMapData() {
       activeScenario = document.getElementById("scenario").value;
-      activeInsightToggle = document.getElementById("insightToggle").value;
-      activeContextLayer = document.getElementById("contextLayer").value;
-      activeContextFilter = document.getElementById("contextFilter").value || "all";
-      activeFireYear = activeContextLayer === "fire" ? activeContextFilter : "all";
-
-      const year = 2026;
 
       try {
-        const geojsonResponse = await fetch("/real-neighborhoods/geojson");
-        if (!geojsonResponse.ok) {
-          throw new Error("Could not load neighborhood GeoJSON.");
+        const response = await fetch(STATIC_GEOJSON_URL);
+        if (!response.ok) {
+          throw new Error("Could not load static neighborhood GeoJSON.");
         }
-        const geojsonData = await geojsonResponse.json();
 
-        const compareResponse = await fetch(
-          `/compare?scenario=${encodeURIComponent(activeScenario)}&year=${year}&fire_year=${encodeURIComponent(activeFireYear)}&insight=on`
-        );
-        if (!compareResponse.ok) {
-          throw new Error("Could not load compare data.");
+        const geojsonData = await response.json();
+
+        if (!geojsonData.features || !Array.isArray(geojsonData.features)) {
+          throw new Error("GeoJSON is missing a features array.");
         }
-        const compareData = await compareResponse.json();
 
-        activeBreaks = computeDynamicBreaks(compareData);
-        updateLegend(compareData);
+        activeBreaks = computeDynamicBreaks(geojsonData.features);
+        updateLegend();
         updatePanelAccent();
-        updateFlaggedPanel(compareData);
-
-        const scoreLookup = {};
-        for (const item of compareData) {
-          scoreLookup[String(item.neighborhood_id)] = item;
-        }
-
-        for (const feature of geojsonData.features) {
-          const id = String(feature.properties.id);
-          const scoreInfo = scoreLookup[id];
-
-          if (scoreInfo) {
-            feature.properties.risk_score_0to100 = scoreInfo.risk_score_0to100;
-            feature.properties.risk_level = scoreInfo.risk_level;
-            feature.properties.top_drivers = scoreInfo.top_drivers;
-            feature.properties.heat = scoreInfo.heat;
-            feature.properties.flood = scoreInfo.flood;
-            feature.properties.fire = scoreInfo.fire;
-            feature.properties.air = scoreInfo.air;
-            feature.properties.has_historical_fire = scoreInfo.has_historical_fire;
-            feature.properties.insight_flag = scoreInfo.insight_flag;
-            feature.properties.insight_message = scoreInfo.insight_message;
-            feature.properties.historical_flood_overlap_pct = scoreInfo.historical_flood_overlap_pct;
-            feature.properties.flood_mismatch_flag = scoreInfo.flood_mismatch_flag;
-            feature.properties.flood_insight_message = scoreInfo.flood_insight_message;
-            feature.properties.air_context_value = scoreInfo.air_context_value;
-            feature.properties.air_mismatch_flag = scoreInfo.air_mismatch_flag;
-            feature.properties.air_insight_message = scoreInfo.air_insight_message;
-            feature.properties.confidence_note = scoreInfo.confidence_note;
-          } else {
-            feature.properties.risk_score_0to100 = null;
-            feature.properties.risk_level = null;
-            feature.properties.top_drivers = [];
-            feature.properties.heat = feature.properties.heat_risk ?? null;
-            feature.properties.flood = feature.properties.flood_risk ?? null;
-            feature.properties.fire = feature.properties.fire_risk ?? null;
-            feature.properties.air = feature.properties.air_risk ?? null;
-            feature.properties.has_historical_fire = false;
-            feature.properties.insight_flag = false;
-            feature.properties.insight_message = null;
-            feature.properties.historical_flood_overlap_pct = 0;
-            feature.properties.flood_mismatch_flag = false;
-            feature.properties.flood_insight_message = null;
-            feature.properties.air_context_value = 0;
-            feature.properties.air_mismatch_flag = false;
-            feature.properties.air_insight_message = null;
-            feature.properties.confidence_note = null;
-          }
-        }
+        updateFlaggedPanel(geojsonData.features);
 
         if (geojsonLayer) {
           map.removeLayer(geojsonLayer);
         }
-
-        clearContextLayers();
 
         geojsonLayer = L.geoJSON(geojsonData, {
           pane: "neighborhoodPane",
@@ -1634,16 +959,14 @@ ${airInsightActive ? `Air pollution comparison flags: ${airFlagged.length}<br>` 
           onEachFeature: onEachFeature
         }).addTo(map);
 
-        await loadContextLayer();
-
-        if (!hasFitBounds) {
+        if (!hasFitBounds && geojsonLayer.getBounds().isValid()) {
           map.fitBounds(geojsonLayer.getBounds(), { padding: [20, 20] });
           hasFitBounds = true;
         }
 
       } catch (error) {
         console.error("Error loading map data:", error);
-        alert("Could not load map data. Check the backend and try again.");
+        alert("Could not load static neighborhood data. Make sure /static/neighborhoods.geojson exists.");
       }
     }
 
@@ -1659,13 +982,8 @@ ${airInsightActive ? `Air pollution comparison flags: ${airFlagged.length}<br>` 
 
     document.getElementById("loadMapBtn").addEventListener("click", loadMapData);
 
-    contextLayerSelect.addEventListener("change", async () => {
-      await refreshContextFilterUI();
-    });
-
     (async function init() {
-      await refreshContextFilterUI();
-      updateLegend([]);
+      updateLegend();
       updatePanelAccent();
       loadMapData();
     })();
