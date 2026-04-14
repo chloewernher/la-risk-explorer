@@ -1,0 +1,27 @@
+la_risk_explorer/
+│
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── models.py
+│   ├── schemas.py
+│   ├── config.py
+│   │
+│   ├── api/
+│   │   ├── __init__.py
+│   │   └── routes.py
+│   │
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── scoring.py
+│   │
+│   ├── repositories/
+│   │   ├── __init__.py
+│   │   └── neighborhood_repository.py
+│   │
+│   └── data/
+│       ├── __init__.py
+│       └── mock_data.py
+│
+├── requirements.txt
+└── run.py
