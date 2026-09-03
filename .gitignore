@@ -5,3 +5,8 @@ __pycache__/
 .env
 .DS_Store
 .vscode/
+
+app/static/air_raw.geojson
+app/static/fire_events.geojson
+app/static/flood_raw.geojson
+app/static/map_interactive.html

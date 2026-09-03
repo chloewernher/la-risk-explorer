@@ -423,24 +423,23 @@
 
         <div class="control-group">
           <label for="contextLayer">Context Layer</label>
-          <select id="contextLayer" disabled>
-            <option value="off">Off</option>
-          </select>
+          <select id="contextLayer">
+  <option value="off">Off</option>
+  <option value="fire">Wildfire History</option>
+  <option value="flood">Flood Zones (FEMA)</option>
+  <option value="air">Air Pollution</option>
+</select>
         </div>
 
         <div class="control-group compact">
           <label for="contextFilter">Context Filter</label>
-          <select id="contextFilter" disabled>
-            <option value="all">No additional filter</option>
-          </select>
-          <div id="contextFilterHelp" class="control-help">Static deployment mode: backend context layers are turned off.</div>
+          <select id="contextFilter">
+  <option value="all">All</option>
+</select>
         </div>
 
         <div class="control-group">
-          <label for="insightToggle">Compare to Real Data</label>
-          <select id="insightToggle" disabled>
-            <option value="off" selected>Off</option>
-          </select>
+          
         </div>
 
         <div class="control-group">
@@ -469,21 +468,30 @@
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
-    const STATIC_GEOJSON_URL = "/static/neighborhoods.geojson";
+    const STATIC_GEOJSON_URL = "./neighborhoods.geojson";
+    const FIRE_GEOJSON_URL = "./fire_events_clipped.geojson";
+    const FLOOD_GEOJSON_URL = "./flood_clipped.geojson";
+    const AIR_GEOJSON_URL = "./air_clipped.geojson";
 
     const map = L.map("map").setView([34.05, -118.32], 10);
 
-    const positron = L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-      attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-      subdomains: "abcd",
-      maxZoom: 20
-    });
+    const positron = L.tileLayer(
+  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?key=cb1_2vi5_1_a99d43503ca7e66696fb2a3f",
+  {
+    attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+    subdomains: "abcd",
+    maxZoom: 20
+  }
+);
 
-    const darkMatter = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-      attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-      subdomains: "abcd",
-      maxZoom: 20
-    });
+const darkMatter = L.tileLayer(
+  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_2vi5_1_a99d43503ca7e66696fb2a3f",
+  {
+    attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+    subdomains: "abcd",
+    maxZoom: 20
+  }
+);
 
     const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "&copy; OpenStreetMap contributors",
@@ -503,9 +511,24 @@
     ).addTo(map);
 
     map.createPane("neighborhoodPane");
-    map.getPane("neighborhoodPane").style.zIndex = 400;
+map.getPane("neighborhoodPane").style.zIndex = 400;
 
-    let geojsonLayer = null;
+map.createPane("firePane");
+map.getPane("firePane").style.zIndex = 650;
+map.getPane("firePane").style.pointerEvents = "auto";
+
+map.createPane("floodPane");
+map.getPane("floodPane").style.zIndex = 640;
+map.getPane("floodPane").style.pointerEvents = "auto";
+
+map.createPane("airPane");
+map.getPane("airPane").style.zIndex = 630;
+map.getPane("airPane").style.pointerEvents = "auto";
+
+let geojsonLayer = null;
+let fireLayer = null;
+let floodLayer = null;
+let airLayer = null;
     let hasFitBounds = false;
 
     let activeScenario = "baseline";
@@ -776,6 +799,10 @@
         <div class="popup-shell">
           <div class="popup-title">${props.name || props.neighborhood || "Neighborhood"}</div>
 
+          <div class="popup-subtitle">
+  ${prettyScenarioLabel(activeScenario)} preset
+</div>
+
           <div class="popup-grid">
             <div><span class="popup-label">Risk Score:</span> ${format(score)}</div>
             <div><span class="popup-label">Risk Level:</span> ${getRiskLevel(score)}</div>
@@ -797,8 +824,8 @@
           </div>
 
           <div class="popup-note">
-            Static deployed view using pre-exported neighborhood data.
-          </div>
+  Scores are relative to the selected risk preset.
+</div>
         </div>
       `;
     }
@@ -826,68 +853,72 @@
       });
     }
 
-    function updateFlaggedPanel(features) {
-      const flaggedContent = document.getElementById("flaggedContent");
-      updatePanelAccent();
+   function updateFlaggedPanel(features) {
+  const flaggedContent = document.getElementById("flaggedContent");
+  updatePanelAccent();
 
-      const ranked = [...features]
-        .map(f => ({
-          name: f.properties.name || f.properties.neighborhood || "Neighborhood",
-          score: getScenarioScore(f.properties, activeScenario),
-          drivers: getTopDrivers(f.properties)
-        }))
-        .filter(item => item.score !== null && !isNaN(item.score))
-        .sort((a, b) => b.score - a.score);
+  const ranked = [...features]
+    .map(f => ({
+      name: f.properties.name || f.properties.neighborhood || "Neighborhood",
+      score: getScenarioScore(f.properties, activeScenario),
+      drivers: getTopDrivers(f.properties)
+    }))
+    .filter(item => item.score !== null && !isNaN(item.score))
+    .sort((a, b) => b.score - a.score);
 
-      const highestRisk = ranked[0];
-      const topThree = ranked.slice(0, 3);
+  const highestRisk = ranked[0];
+  const topThree = ranked.slice(0, 3);
 
-      let html = `
-        <div class="insight-item">
-          <div class="insight-name">Current View State</div>
-          <div class="insight-meta">
-            Preset: ${prettyScenarioLabel(activeScenario)}<br>
-            Data Source: Static neighborhood GeoJSON<br>
-            Context Layers: Disabled for deployment
-          </div>
+  let html = `
+    <div class="insight-item">
+      <div class="insight-name">Current View</div>
+      <div class="insight-meta">
+        Preset: ${prettyScenarioLabel(activeScenario)}<br>
+        Context Layers: Fire, Flood, and Air Pollution available
+      </div>
+    </div>
+  `;
+
+  if (highestRisk) {
+    html += `
+      <div class="insight-item">
+        <div class="insight-name">Highest Risk Neighborhood</div>
+        <div class="insight-meta">
+          ${highestRisk.name}<br>
+          Score: ${format(highestRisk.score)}<br>
+          Drivers: ${highestRisk.drivers.join(", ")}
         </div>
-      `;
+      </div>
+    `;
+  }
 
-      if (highestRisk) {
-        html += `
-          <div class="insight-item">
-            <div class="insight-name">Highest Risk Neighborhood</div>
-            <div class="insight-meta">
-              ${highestRisk.name}<br>
-              Score: ${format(highestRisk.score)}<br>
-              Drivers: ${highestRisk.drivers.join(", ")}
-            </div>
-          </div>
-        `;
-      }
-
-      if (topThree.length) {
-        html += `
-          <div class="insight-item">
-            <div class="insight-name">Top Ranked Areas</div>
-            <div class="insight-meta">
-              ${topThree.map((item, i) => `${i + 1}. ${item.name} (${format(item.score)})`).join("<br>")}
-            </div>
-          </div>
-        `;
-      }
-
-      html += `
-        <div class="insight-item">
-          <div class="insight-name">Note</div>
-          <div class="insight-meta">
-            This public version preserves the choropleth, popups, and preset switching while using pre-exported data for reliable deployment.
-          </div>
+  if (topThree.length) {
+    html += `
+      <div class="insight-item">
+        <div class="insight-name">Top Ranked Areas</div>
+        <div class="insight-meta">
+          ${topThree
+            .map(
+              (item, i) =>
+                `${i + 1}. ${item.name} (${format(item.score)})`
+            )
+            .join("<br>")}
         </div>
-      `;
+      </div>
+    `;
+  }
 
-      flaggedContent.innerHTML = html;
-    }
+  html += `
+    <div class="insight-item">
+      <div class="insight-name">About These Rankings</div>
+      <div class="insight-meta">
+        Rankings reflect relative neighborhood risk under the currently selected preset.
+      </div>
+    </div>
+  `;
+
+  flaggedContent.innerHTML = html;
+}
 
     function updateLegend() {
       const ramp = getRampForScenario(activeScenario);
@@ -919,15 +950,363 @@
         </div>
 
         <div class="legend-section">
-          <div class="legend-section-title">Map Highlights</div>
-          <div class="legend-row"><span class="legend-swatch" style="background:#ffffff; border:2px solid #475569;"></span>Neighborhood boundary</div>
-        </div>
+  <div class="legend-section-title">Map Highlights</div>
+
+  <div class="legend-row">
+    <span class="legend-swatch" style="background:#ffffff; border:2px solid #475569;"></span>
+    Neighborhood boundary
+  </div>
+
+  <div class="legend-row">
+    <span class="legend-swatch" style="background:#e879f9; border:2px solid #d946ef;"></span>
+    Wildfire history
+  </div>
+
+  <div class="legend-row">
+    <span class="legend-swatch" style="background:#22c7c9; border:2px solid #22c7c9;"></span>
+    Flood context
+  </div>
+
+  <div class="legend-row">
+    <span class="legend-swatch" style="background:#c084fc; border:2px solid #7c3aed;"></span>
+    Air pollution context
+  </div>
+</div>
 
         <div class="legend-note">
           Darker colors indicate neighborhoods that rank higher within the selected preset. Exact scores appear in popups.
         </div>
       `;
     }
+  async function loadFireLayer() {
+  const selectedLayer = document.getElementById("contextLayer").value;
+
+  if (fireLayer) {
+    map.removeLayer(fireLayer);
+    fireLayer = null;
+  }
+
+  if (selectedLayer !== "fire") {
+    return;
+  }
+
+  try {
+    const response = await fetch(FIRE_GEOJSON_URL);
+
+    if (!response.ok) {
+      throw new Error("Could not load wildfire data.");
+    }
+
+    const fireData = await response.json();
+    const selectedFilter =
+  document.getElementById("contextFilter").value;
+
+const filteredFireData = {
+  ...fireData,
+  features: fireData.features.filter(feature => {
+    if (selectedFilter === "all") {
+      return true;
+    }
+
+    return String(feature.properties?.year) === selectedFilter;
+  })
+};
+
+    fireLayer = L.geoJSON(filteredFireData, {
+      pane: "firePane",
+
+      style: {
+    color: "#d946ef",
+    weight: 3,
+    opacity: 1,
+    fillColor: "#e879f9",
+    fillOpacity: 0.45
+},
+
+      onEachFeature: function(feature, layer) {
+        const props = feature.properties || {};
+
+        layer.bindPopup(`
+          <div class="popup-shell">
+            <div class="popup-title">Wildfire History</div>
+            <div>
+              <strong>Name:</strong> ${props.name || "N/A"}
+            </div>
+            <div>
+              <strong>Year:</strong> ${props.year || "N/A"}
+            </div>
+          </div>
+        `);
+      }
+    }).addTo(map);
+
+    fireLayer.bringToFront();
+
+  } catch (error) {
+    console.error("Error loading wildfire data:", error);
+    alert("Could not load wildfire history.");
+  }
+}
+
+async function loadFloodLayer() {
+  const selectedLayer = document.getElementById("contextLayer").value;
+
+  if (floodLayer) {
+    map.removeLayer(floodLayer);
+    floodLayer = null;
+  }
+
+  if (selectedLayer !== "flood") {
+    return;
+  }
+
+  try {
+    const response = await fetch(FLOOD_GEOJSON_URL);
+
+    if (!response.ok) {
+      throw new Error("Could not load FEMA flood data.");
+    }
+
+    const floodData = await response.json();
+    const selectedFilter =
+  document.getElementById("contextFilter").value;
+
+const filteredFloodData = {
+  ...floodData,
+  features: floodData.features.filter(feature => {
+    if (selectedFilter === "all") {
+      return true;
+    }
+
+    return feature.properties?.fld_zone === selectedFilter;
+  })
+};
+
+    floodLayer = L.geoJSON(filteredFloodData, {
+      pane: "floodPane",
+
+      style: {
+    color: "#22c7c9",
+    weight: 2.3,
+    opacity: 0.9,
+    fillColor: "#22c7c9",
+    fillOpacity: 0.25
+},
+
+      onEachFeature: function(feature, layer) {
+        const props = feature.properties || {};
+
+        layer.bindPopup(`
+          <div class="popup-shell">
+            <div class="popup-title">FEMA Flood Zone</div>
+            <div>
+              <strong>Flood Zone:</strong> ${props.fld_zone || "N/A"}
+            </div>
+            <div>
+              <strong>Zone Subtype:</strong> ${props.zone_subty || "N/A"}
+            </div>
+            <div>
+              <strong>Special Flood Hazard Area:</strong> ${props.sfha_tf || "N/A"}
+            </div>
+          </div>
+        `);
+      }
+    }).addTo(map);
+
+    floodLayer.bringToFront();
+
+  } catch (error) {
+    console.error("Error loading FEMA flood data:", error);
+    alert("Could not load FEMA flood zones.");
+  }
+}
+
+async function loadAirLayer() {
+  const selectedLayer = document.getElementById("contextLayer").value;
+
+  if (airLayer) {
+    map.removeLayer(airLayer);
+    airLayer = null;
+  }
+
+  if (selectedLayer !== "air") {
+    return;
+  }
+
+  try {
+    const response = await fetch(AIR_GEOJSON_URL);
+
+    if (!response.ok) {
+      throw new Error("Could not load air pollution data.");
+    }
+
+    const airData = await response.json();
+    const selectedPollutant =
+  document.getElementById("contextFilter").value;
+
+const pollutantLabels = {
+  pm25: "PM2.5",
+  ozone: "Ozone",
+  diesel_pm: "Diesel PM",
+  traffic: "Traffic Pollution",
+  toxic_releases: "Toxic Releases",
+  pesticides: "Pesticides"
+};
+
+const values = airData.features
+  .map(feature =>
+    Number(feature.properties?.[selectedPollutant])
+  )
+  .filter(value => Number.isFinite(value));
+
+const minValue = Math.min(...values);
+const maxValue = Math.max(...values);
+
+function getAirOpacity(value) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return 0.08;
+  }
+
+  if (maxValue === minValue) {
+    return 0.35;
+  }
+
+  const normalized =
+    (numericValue - minValue) / (maxValue - minValue);
+
+  return 0.15 + normalized * 0.55;
+}
+
+    airLayer = L.geoJSON(airData, {
+      pane: "airPane",
+
+      style: function(feature) {
+  const value =
+    feature.properties?.[selectedPollutant];
+
+  return {
+    color: "#8b5cf6",
+weight: 1.8,
+opacity: 0.95,
+fillColor: "#d8b4fe",
+fillOpacity: getAirOpacity(value)
+  };
+},
+
+      onEachFeature: function(feature, layer) {
+  const props = feature.properties || {};
+
+  const value = props[selectedPollutant];
+
+  layer.bindPopup(`
+    <div class="popup-shell">
+      <div class="popup-title">
+        ${pollutantLabels[selectedPollutant]}
+      </div>
+
+      <div>
+        <strong>Value:</strong>
+        ${value ?? "N/A"}
+      </div>
+
+      <div style="margin-top: 6px;">
+        CalEnviroScreen air pollution indicator
+      </div>
+    </div>
+  `);
+}
+    }).addTo(map);
+
+    airLayer.bringToFront();
+
+  } catch (error) {
+    console.error("Error loading air pollution data:", error);
+    alert("Could not load air pollution data.");
+  }
+}
+
+async function updateContextFilter() {
+  const contextLayer = document.getElementById("contextLayer").value;
+  const contextFilter = document.getElementById("contextFilter");
+
+  contextFilter.innerHTML = "";
+
+  // OFF
+  if (contextLayer === "off") {
+    contextFilter.innerHTML = `
+      <option value="all">Select a context layer</option>
+    `;
+    contextFilter.disabled = true;
+    return;
+  }
+
+  contextFilter.disabled = false;
+
+  // WILDFIRE
+  if (contextLayer === "fire") {
+    const response = await fetch(FIRE_GEOJSON_URL);
+    const data = await response.json();
+
+    const years = [
+      ...new Set(
+        data.features
+          .map(feature => feature.properties?.year)
+          .filter(year => year !== null && year !== undefined)
+      )
+    ].sort((a, b) => b - a);
+
+    contextFilter.innerHTML =
+      `<option value="all">All Years</option>` +
+      years
+        .map(year => `<option value="${year}">${year}</option>`)
+        .join("");
+
+    return;
+  }
+
+  // FLOOD
+  if (contextLayer === "flood") {
+    const response = await fetch(FLOOD_GEOJSON_URL);
+    const data = await response.json();
+
+    const zones = [
+      ...new Set(
+        data.features
+          .map(feature => feature.properties?.fld_zone)
+          .filter(zone => zone)
+      )
+    ].sort();
+
+    contextFilter.innerHTML =
+      `<option value="all">All Flood Zones</option>` +
+      zones
+        .map(zone => `<option value="${zone}">Zone ${zone}</option>`)
+        .join("");
+
+    return;
+  }
+
+  // AIR POLLUTION
+  if (contextLayer === "air") {
+    contextFilter.innerHTML = `
+      <option value="pm25">PM2.5</option>
+      <option value="ozone">Ozone</option>
+      <option value="diesel_pm">Diesel PM</option>
+      <option value="traffic">Traffic Pollution</option>
+      <option value="toxic_releases">Toxic Releases</option>
+      <option value="pesticides">Pesticides</option>
+    `;
+  }
+}
+
+document
+  .getElementById("contextLayer")
+  .addEventListener("change", updateContextFilter);
+
+updateContextFilter();
+
 
     async function loadMapData() {
       activeScenario = document.getElementById("scenario").value;
@@ -964,6 +1343,10 @@
           hasFitBounds = true;
         }
 
+        await loadFireLayer();
+        await loadFloodLayer();
+        await loadAirLayer();
+
       } catch (error) {
         console.error("Error loading map data:", error);
         alert("Could not load static neighborhood data. Make sure /static/neighborhoods.geojson exists.");
@@ -983,8 +1366,6 @@
     document.getElementById("loadMapBtn").addEventListener("click", loadMapData);
 
     (async function init() {
-      updateLegend();
-      updatePanelAccent();
       loadMapData();
     })();
   </script>
